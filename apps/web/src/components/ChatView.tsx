@@ -82,6 +82,7 @@ import {
   isLatestTurnSettled,
   formatElapsed,
   formatTimestamp,
+  type WorkLogEntry,
 } from "../session-logic";
 import { AUTO_SCROLL_BOTTOM_THRESHOLD_PX, isScrollContainerNearBottom } from "../chat-scroll";
 import {
@@ -138,20 +139,31 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   CircleAlertIcon,
+  DatabaseIcon,
+  EyeIcon,
   FileIcon,
   FolderIcon,
   DiffIcon,
   EllipsisIcon,
   FolderClosedIcon,
+  HammerIcon,
   ListTodoIcon,
   LockIcon,
   LockOpenIcon,
+  type LucideIcon,
+  SearchIcon,
+  SquarePenIcon,
+  TerminalIcon,
+  TargetIcon,
   Undo2Icon,
+  WrenchIcon,
   XIcon,
   CopyIcon,
   CheckIcon,
+  ZapIcon,
 } from "lucide-react";
 import { Button } from "./ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
 import { Input } from "./ui/input";
 import { Separator } from "./ui/separator";
 import { Group, GroupSeparator } from "./ui/group";
@@ -299,6 +311,436 @@ function workToneClass(tone: "thinking" | "tool" | "info" | "error"): string {
   if (tone === "thinking") return "text-muted-foreground/50";
   return "text-muted-foreground/40";
 }
+
+function workToneIcon(tone: "thinking" | "tool" | "info" | "error") {
+  if (tone === "error") {
+    return {
+      icon: CircleAlertIcon,
+      className: "text-black/85 dark:text-white/90",
+    };
+  }
+  if (tone === "thinking") {
+    return {
+      icon: BotIcon,
+      className: "text-black/85 dark:text-white/90",
+    };
+  }
+  if (tone === "info") {
+    return {
+      icon: CheckIcon,
+      className: "text-black/85 dark:text-white/90",
+    };
+  }
+  return {
+    icon: ZapIcon,
+    className: "text-black/85 dark:text-white/90",
+  };
+}
+
+function workEntryPreview(workEntry: {
+  detail?: string;
+  command?: string;
+  changedFiles?: ReadonlyArray<string>;
+}): string | null {
+  if (workEntry.command) return workEntry.command;
+  if (workEntry.detail) return workEntry.detail;
+  if ((workEntry.changedFiles?.length ?? 0) > 0) {
+    const [firstPath] = workEntry.changedFiles ?? [];
+    if (!firstPath) return null;
+    return workEntry.changedFiles!.length === 1
+      ? firstPath
+      : `${firstPath} +${workEntry.changedFiles!.length - 1} more`;
+  }
+  return null;
+}
+
+function workEntryIcon(workEntry: WorkLogEntry): LucideIcon {
+  if (workEntry.requestKind === "command") return TerminalIcon;
+  if (workEntry.requestKind === "file-read") return EyeIcon;
+  if (workEntry.requestKind === "file-change") return SquarePenIcon;
+
+  const haystack = [
+    workEntry.label,
+    workEntry.toolTitle,
+    workEntry.detail,
+    workEntry.output,
+    workEntry.command,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join(" ")
+    .toLowerCase();
+
+  if (haystack.includes("report_intent") || haystack.includes("intent logged")) {
+    return TargetIcon;
+  }
+  if (
+    haystack.includes("bash") ||
+    haystack.includes("read_bash") ||
+    haystack.includes("write_bash") ||
+    haystack.includes("stop_bash") ||
+    haystack.includes("list_bash")
+  ) {
+    return TerminalIcon;
+  }
+  if (haystack.includes("sql")) return DatabaseIcon;
+  if (haystack.includes("view")) return EyeIcon;
+  if (haystack.includes("apply_patch")) return SquarePenIcon;
+  if (haystack.includes("rg") || haystack.includes("glob") || haystack.includes("search")) {
+    return SearchIcon;
+  }
+  if (haystack.includes("skill")) return ZapIcon;
+  if (haystack.includes("ask_user") || haystack.includes("approval")) return BotIcon;
+  if (haystack.includes("store_memory")) return FolderIcon;
+  if (haystack.includes("edit") || haystack.includes("patch")) return WrenchIcon;
+  if (haystack.includes("file")) return FileIcon;
+
+  switch (workEntry.itemType) {
+    case "command_execution":
+      return TerminalIcon;
+    case "file_change":
+      return SquarePenIcon;
+    case "mcp_tool_call":
+      return WrenchIcon;
+    case "dynamic_tool_call":
+    case "collab_agent_tool_call":
+      return HammerIcon;
+    case "web_search":
+      return SearchIcon;
+    case "image_view":
+      return EyeIcon;
+  }
+  if (haystack.includes("task")) return HammerIcon;
+
+  if (workEntry.activityKind === "turn.plan.updated") return ListTodoIcon;
+  if (workEntry.activityKind === "task.progress") return HammerIcon;
+  if (workEntry.activityKind === "approval.requested") return BotIcon;
+  if (workEntry.activityKind === "approval.resolved") return CheckIcon;
+
+  return workToneIcon(workEntry.tone).icon;
+}
+
+function capitalizePhrase(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return value;
+  }
+  return `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}`;
+}
+
+function toolWorkEntryHeading(workEntry: WorkLogEntry): string {
+  if (!workEntry.toolTitle) {
+    return capitalizePhrase(workEntry.label);
+  }
+
+  const statusLabel =
+    workEntry.toolStatus === "failed"
+      ? "failed"
+      : workEntry.toolStatus === "declined"
+        ? "declined"
+        : workEntry.toolStatus === "inProgress" || workEntry.activityKind === "tool.updated"
+          ? "running"
+          : workEntry.activityKind === "tool.started"
+            ? "started"
+            : "complete";
+  return capitalizePhrase(`${workEntry.toolTitle} ${statusLabel}`);
+}
+
+function primaryWorkEntryPath(workEntry: WorkLogEntry): string | null {
+  const [firstPath] = workEntry.changedFiles ?? [];
+  return firstPath ?? null;
+}
+
+function toolWorkEntryStatusBadge(workEntry: WorkLogEntry): {
+  label: string;
+  variant: "error" | "info" | "warning";
+} | null {
+  if (typeof workEntry.exitCode === "number") {
+    if (workEntry.exitCode === 0) {
+      return null;
+    }
+    return {
+      label: `Exit ${workEntry.exitCode}`,
+      variant: "error",
+    };
+  }
+
+  switch (workEntry.toolStatus) {
+    case "failed":
+      return { label: "Failed", variant: "error" };
+    case "declined":
+      return { label: "Declined", variant: "warning" };
+    case "inProgress":
+      return { label: "Running", variant: "info" };
+    default:
+      return null;
+  }
+}
+
+function summarizeToolOutput(value: string, limit = 96): string {
+  const singleLine = value.replace(/\s+/g, " ").trim();
+  if (singleLine.length <= limit) {
+    return singleLine;
+  }
+  return `${singleLine.slice(0, Math.max(0, limit - 3))}...`;
+}
+
+function collapsedToolWorkEntryPreview(
+  workEntry: WorkLogEntry,
+  primaryPath: string | null,
+): string | null {
+  if (workEntry.itemType === "command_execution" || workEntry.requestKind === "command") {
+    if (workEntry.output) {
+      return summarizeToolOutput(workEntry.output);
+    }
+    if (workEntry.command) {
+      return workEntry.command;
+    }
+  }
+  if (primaryPath) {
+    return primaryPath;
+  }
+  if (workEntry.command) {
+    return workEntry.command;
+  }
+  if (workEntry.output) {
+    return summarizeToolOutput(workEntry.output);
+  }
+  if (workEntry.detail) {
+    return summarizeToolOutput(workEntry.detail);
+  }
+  return null;
+}
+
+function isRichToolWorkEntry(workEntry: WorkLogEntry): boolean {
+  return workEntry.activityKind === "tool.completed" || workEntry.activityKind === "tool.updated";
+}
+
+const ToolWorkEntryRow = memo(function ToolWorkEntryRow(props: {
+  workEntry: WorkLogEntry;
+  workEntryIndex: number;
+}) {
+  const { workEntry, workEntryIndex } = props;
+  const [open, setOpen] = useState(false);
+  const iconConfig = workToneIcon(workEntry.tone);
+  const EntryIcon = workEntryIcon(workEntry);
+  const heading = toolWorkEntryHeading(workEntry);
+  const statusBadge = toolWorkEntryStatusBadge(workEntry);
+  const primaryPath = !workEntry.command ? primaryWorkEntryPath(workEntry) : null;
+  const additionalPaths =
+    workEntry.changedFiles?.slice(primaryPath ? 1 : 0, primaryPath ? 4 : 4) ?? [];
+  const hiddenPathCount =
+    (workEntry.changedFiles?.length ?? 0) - additionalPaths.length - (primaryPath ? 1 : 0);
+  const preview = collapsedToolWorkEntryPreview(workEntry, primaryPath);
+  const displayText = preview ? `${heading} - ${preview}` : heading;
+  const hasExpandedDetails = Boolean(
+    workEntry.command ||
+      primaryPath ||
+      additionalPaths.length > 0 ||
+      workEntry.output ||
+      typeof workEntry.exitCode === "number",
+  );
+
+  const summaryRow = (
+    <div
+      className={cn(
+        "flex items-center gap-2 rounded-lg px-1 py-1 transition-colors duration-150",
+        hasExpandedDetails ? "hover:bg-accent/25" : "",
+      )}
+    >
+      {hasExpandedDetails && (
+        <ChevronRightIcon
+          className={cn(
+            "size-3 shrink-0 text-muted-foreground/45 transition-transform duration-150",
+            open && "rotate-90",
+          )}
+        />
+      )}
+      <span
+        className={cn(
+          "flex size-5 shrink-0 items-center justify-center",
+          iconConfig.className,
+          !hasExpandedDetails && "ml-5",
+        )}
+      >
+        <EntryIcon className="size-3" />
+      </span>
+      <div className="min-w-0 flex-1 overflow-hidden">
+        <p
+          className={cn(
+            "truncate text-[11px] leading-5",
+            workToneClass(workEntry.tone),
+            preview ? "text-muted-foreground/70" : "",
+          )}
+          title={displayText}
+        >
+          <span className={cn("text-foreground/80", workToneClass(workEntry.tone))}>{heading}</span>
+          {preview && <span className="text-muted-foreground/55"> - {preview}</span>}
+        </p>
+      </div>
+      {statusBadge && (
+        <Badge
+          variant={statusBadge.variant}
+          className="shrink-0 px-1 py-0 font-mono text-[8px] uppercase tracking-[0.14em]"
+        >
+          {statusBadge.label}
+        </Badge>
+      )}
+      <span className="shrink-0 text-[9px] text-muted-foreground/35">
+        {formatTimestamp(workEntry.createdAt)}
+      </span>
+    </div>
+  );
+
+  const expandedDetails = (
+    <div className="mt-1 space-y-1.5 pl-10">
+      {workEntry.command && (
+        <div
+          className="flex min-w-0 items-center gap-1.5 rounded-md border border-border/55 bg-background/55 px-2 py-1"
+          title={workEntry.command}
+        >
+          <TerminalIcon className="size-3 shrink-0 text-muted-foreground/65" />
+          <span className="truncate font-mono text-[10px] text-foreground/78">{workEntry.command}</span>
+        </div>
+      )}
+
+      {!workEntry.command && primaryPath && (
+        <div className="flex min-w-0 items-center gap-1.5">
+          <Badge variant="outline" className="max-w-32 shrink-0 truncate px-1.5 py-0 text-[10px]">
+            {basenameOfPath(primaryPath)}
+          </Badge>
+          <span
+            className="min-w-0 truncate font-mono text-[10px] text-muted-foreground/70"
+            title={primaryPath}
+          >
+            {primaryPath}
+          </span>
+        </div>
+      )}
+
+      {additionalPaths.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {additionalPaths.map((filePath) => (
+            <span
+              key={`${workEntry.id}:${filePath}`}
+              className="rounded-md border border-border/55 bg-background/55 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/75"
+              title={filePath}
+            >
+              {filePath}
+            </span>
+          ))}
+          {hiddenPathCount > 0 && (
+            <span className="px-1 text-[10px] text-muted-foreground/55">+{hiddenPathCount}</span>
+          )}
+        </div>
+      )}
+
+      {workEntry.output && (
+        <div className="rounded-md border border-border/55 bg-background/75 px-2.5 py-2">
+          <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-4 text-foreground/78">
+            {workEntry.output}
+          </pre>
+        </div>
+      )}
+
+      {typeof workEntry.exitCode === "number" && (
+        <div className="text-[9px] font-mono uppercase tracking-[0.12em] text-muted-foreground/55">
+          {workEntry.exitCode === 0 ? "Exited successfully" : `Exit ${workEntry.exitCode}`}
+        </div>
+      )}
+    </div>
+  );
+
+  if (!hasExpandedDetails) {
+    return (
+      <div
+        className="animate-in fade-in slide-in-from-bottom-1 rounded-lg duration-200"
+        style={{
+          animationDelay: `${Math.min(workEntryIndex, 4) * 40}ms`,
+        }}
+      >
+        {summaryRow}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="animate-in fade-in slide-in-from-bottom-1 rounded-lg duration-200"
+      style={{
+        animationDelay: `${Math.min(workEntryIndex, 4) * 40}ms`,
+      }}
+    >
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <CollapsibleTrigger className="block w-full text-left">{summaryRow}</CollapsibleTrigger>
+        <CollapsibleContent>{expandedDetails}</CollapsibleContent>
+      </Collapsible>
+    </div>
+  );
+});
+
+const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
+  workEntry: WorkLogEntry;
+  workEntryIndex: number;
+}) {
+  const { workEntry, workEntryIndex } = props;
+  const iconConfig = workToneIcon(workEntry.tone);
+  const EntryIcon = workEntryIcon(workEntry);
+  const preview = workEntryPreview(workEntry);
+  const displayText = preview ? `${workEntry.label} - ${preview}` : workEntry.label;
+  const hasChangedFiles = (workEntry.changedFiles?.length ?? 0) > 0;
+  const previewIsChangedFiles = hasChangedFiles && !workEntry.command && !workEntry.detail;
+
+  return (
+    <div
+      className="animate-in fade-in slide-in-from-bottom-1 rounded-lg px-1 py-1 duration-200"
+      style={{
+        animationDelay: `${Math.min(workEntryIndex, 4) * 40}ms`,
+      }}
+    >
+      <div className="flex items-center gap-2 transition-[opacity,translate] duration-200">
+        <span className={cn("flex size-5 shrink-0 items-center justify-center", iconConfig.className)}>
+          <EntryIcon className="size-3" />
+        </span>
+        <div className="min-w-0 flex-1 overflow-hidden animate-in fade-in duration-300">
+          <p
+            className={cn(
+              "truncate text-[11px] leading-5",
+              workToneClass(workEntry.tone),
+              preview ? "text-muted-foreground/70" : "",
+            )}
+            title={displayText}
+          >
+            <span className={cn("text-foreground/80", workToneClass(workEntry.tone))}>
+              {workEntry.label}
+            </span>
+            {preview && <span className="text-muted-foreground/55"> - {preview}</span>}
+          </p>
+        </div>
+        <span className="shrink-0 text-[9px] text-muted-foreground/35">
+          {formatTimestamp(workEntry.createdAt)}
+        </span>
+      </div>
+      {hasChangedFiles && !previewIsChangedFiles && (
+        <div className="animate-in fade-in slide-in-from-bottom-1 mt-1 flex flex-wrap gap-1 pl-6 duration-200">
+          {workEntry.changedFiles?.slice(0, 4).map((filePath) => (
+            <span
+              key={`${workEntry.id}:${filePath}`}
+              className="rounded-md border border-border/55 bg-background/55 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/75"
+              title={filePath}
+            >
+              {filePath}
+            </span>
+          ))}
+          {(workEntry.changedFiles?.length ?? 0) > 4 && (
+            <span className="px-1 text-[10px] text-muted-foreground/55">
+              +{(workEntry.changedFiles?.length ?? 0) - 4}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+});
 
 interface ExpandedImageItem {
   src: string;
@@ -849,20 +1291,37 @@ export default function ChatView({ threadId }: ChatViewProps) {
     customModelsForSelectedProvider,
     selectedProvider,
   ]);
-  const reasoningOptions = getReasoningEffortOptions(selectedProvider);
+  const selectedCopilotModelMetadata =
+    selectedProvider === "copilot"
+      ? copilotProviderModels.find((model) => model.id === selectedModel) ?? null
+      : null;
+  const reasoningOptions =
+    selectedProvider === "codex"
+      ? getReasoningEffortOptions("codex")
+      : (selectedCopilotModelMetadata?.supportedReasoningEfforts ?? []);
   const supportsReasoningEffort = reasoningOptions.length > 0;
-  const selectedEffort = composerDraft.effort ?? getDefaultReasoningEffort(selectedProvider);
+  const defaultReasoningEffort =
+    selectedProvider === "codex"
+      ? getDefaultReasoningEffort("codex")
+      : (selectedCopilotModelMetadata?.defaultReasoningEffort ?? null);
+  const selectedEffort =
+    composerDraft.effort && reasoningOptions.includes(composerDraft.effort)
+      ? composerDraft.effort
+      : defaultReasoningEffort;
   const selectedCodexFastModeEnabled =
     selectedProvider === "codex" ? composerDraft.codexFastMode : false;
   const selectedModelOptionsForDispatch = useMemo(() => {
-    if (selectedProvider !== "codex") {
-      return undefined;
+    if (selectedProvider === "codex") {
+      const codexOptions = {
+        ...(supportsReasoningEffort && selectedEffort ? { reasoningEffort: selectedEffort } : {}),
+        ...(selectedCodexFastModeEnabled ? { fastMode: true } : {}),
+      };
+      return Object.keys(codexOptions).length > 0 ? { codex: codexOptions } : undefined;
     }
-    const codexOptions = {
-      ...(supportsReasoningEffort && selectedEffort ? { reasoningEffort: selectedEffort } : {}),
-      ...(selectedCodexFastModeEnabled ? { fastMode: true } : {}),
-    };
-    return Object.keys(codexOptions).length > 0 ? { codex: codexOptions } : undefined;
+    if (selectedProvider === "copilot" && supportsReasoningEffort && selectedEffort) {
+      return { copilot: { reasoningEffort: selectedEffort } };
+    }
+    return undefined;
   }, [selectedCodexFastModeEnabled, selectedEffort, selectedProvider, supportsReasoningEffort]);
   const providerOptionsForDispatch = useMemo(() => {
     if (!settings.codexBinaryPath && !settings.codexHomePath) {
@@ -3189,16 +3648,23 @@ export default function ChatView({ threadId }: ChatViewProps) {
       setComposerDraftProvider(activeThread.id, provider);
       setComposerDraftModel(
         activeThread.id,
-        resolveAppModelSelection(provider, settings.customCodexModels, model),
+        resolveAppModelSelection(
+          provider,
+          provider === "copilot" ? settings.customCopilotModels : settings.customCodexModels,
+          model,
+          builtInModelOptionsByProvider[provider],
+        ),
       );
       scheduleComposerFocus();
     },
     [
       activeThread,
+      builtInModelOptionsByProvider,
       lockedProvider,
       scheduleComposerFocus,
       setComposerDraftModel,
       setComposerDraftProvider,
+      settings.customCopilotModels,
       settings.customCodexModels,
     ],
   );
@@ -3809,8 +4275,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
                                 orientation="vertical"
                                 className="mx-0.5 hidden h-4 sm:block"
                               />
-                              <CodexTraitsPicker
+                              <ModelTraitsPicker
                                 effort={selectedEffort}
+                                defaultEffort={defaultReasoningEffort}
                                 fastModeEnabled={selectedCodexFastModeEnabled}
                                 options={reasoningOptions}
                                 onEffortChange={onEffortSelect}
@@ -3823,6 +4290,15 @@ export default function ChatView({ threadId }: ChatViewProps) {
                             orientation="vertical"
                             className="mx-0.5 hidden h-4 sm:block"
                           />
+
+                          {selectedProvider !== "codex" && selectedEffort != null ? (
+                            <ModelTraitsPicker
+                              effort={selectedEffort}
+                              defaultEffort={defaultReasoningEffort}
+                              options={reasoningOptions}
+                              onEffortChange={onEffortSelect}
+                            />
+                          ) : null}
 
                           <Button
                             variant="ghost"
@@ -5276,73 +5752,43 @@ const MessagesTimeline = memo(function MessagesTimeline({
               : groupedEntries;
           const hiddenCount = groupedEntries.length - visibleEntries.length;
           const onlyToolEntries = groupedEntries.every((entry) => entry.tone === "tool");
-          const groupLabel = onlyToolEntries
-            ? groupedEntries.length === 1
-              ? "Tool call"
-              : `Tool calls (${groupedEntries.length})`
-            : groupedEntries.length === 1
-              ? "Work event"
-              : `Work log (${groupedEntries.length})`;
+          const showHeader = hasOverflow || !onlyToolEntries;
+          const groupLabel = onlyToolEntries ? "Tool calls" : "Work log";
 
           return (
-            <div className="rounded-lg border border-border/80 bg-card/45 px-3 py-2">
-              <div className="mb-1.5 flex items-center justify-between gap-3">
-                <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/65">
-                  {groupLabel}
-                </p>
-                {hasOverflow && (
-                  <button
-                    type="button"
-                    className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/55 transition-colors duration-150 hover:text-muted-foreground/80"
-                    onClick={() => onToggleWorkGroup(groupId)}
-                  >
-                    {isExpanded ? "Show less" : `Show ${hiddenCount} more`}
-                  </button>
-                )}
-              </div>
-              <div className="space-y-1">
-                {visibleEntries.map((workEntry) => (
-                  <div key={`work-row:${workEntry.id}`} className="flex items-start gap-2 py-0.5">
-                    <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/30" />
-                    <div className="min-w-0 flex-1 py-[2px]">
-                      <p className={`text-[11px] leading-relaxed ${workToneClass(workEntry.tone)}`}>
-                        {workEntry.label}
-                      </p>
-                      {workEntry.command && (
-                        <pre className="mt-1 overflow-x-auto rounded-md border border-border/70 bg-background/80 px-2 py-1 font-mono text-[11px] leading-relaxed text-foreground/80">
-                          {workEntry.command}
-                        </pre>
-                      )}
-                      {workEntry.changedFiles && workEntry.changedFiles.length > 0 && (
-                        <div className="mt-1 flex flex-wrap gap-1">
-                          {workEntry.changedFiles.slice(0, 6).map((filePath) => (
-                            <span
-                              key={`${workEntry.id}:${filePath}`}
-                              className="rounded-md border border-border/70 bg-background/65 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/85"
-                              title={filePath}
-                            >
-                              {filePath}
-                            </span>
-                          ))}
-                          {workEntry.changedFiles.length > 6 && (
-                            <span className="px-1 text-[10px] text-muted-foreground/65">
-                              +{workEntry.changedFiles.length - 6} more
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      {workEntry.detail &&
-                        (!workEntry.command || workEntry.detail !== workEntry.command) && (
-                          <p
-                            className="mt-1 text-[11px] leading-relaxed text-muted-foreground/75"
-                            title={workEntry.detail}
-                          >
-                            {workEntry.detail}
-                          </p>
-                        )}
-                    </div>
-                  </div>
-                ))}
+            <div className="rounded-xl border border-border/45 bg-card/25 px-2 py-1.5">
+              {showHeader && (
+                <div className="mb-1.5 flex items-center justify-between gap-2 px-0.5">
+                  <p className="text-[9px] uppercase tracking-[0.16em] text-muted-foreground/55">
+                    {groupLabel} ({groupedEntries.length})
+                  </p>
+                  {hasOverflow && (
+                    <button
+                      type="button"
+                      className="text-[9px] uppercase tracking-[0.12em] text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/75"
+                      onClick={() => onToggleWorkGroup(groupId)}
+                    >
+                      {isExpanded ? "Show less" : `Show ${hiddenCount} more`}
+                    </button>
+                  )}
+                </div>
+              )}
+              <div className="space-y-0.5">
+                {visibleEntries.map((workEntry, workEntryIndex) => {
+                  return isRichToolWorkEntry(workEntry) ? (
+                    <ToolWorkEntryRow
+                      key={`work-row:${workEntry.id}`}
+                      workEntry={workEntry}
+                      workEntryIndex={workEntryIndex}
+                    />
+                  ) : (
+                    <SimpleWorkEntryRow
+                      key={`work-row:${workEntry.id}`}
+                      workEntry={workEntry}
+                      workEntryIndex={workEntryIndex}
+                    />
+                  );
+                })}
               </div>
             </div>
           );
@@ -6059,15 +6505,15 @@ const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(pr
   );
 });
 
-const CodexTraitsPicker = memo(function CodexTraitsPicker(props: {
+const ModelTraitsPicker = memo(function ModelTraitsPicker(props: {
   effort: CodexReasoningEffort;
-  fastModeEnabled: boolean;
+  defaultEffort: CodexReasoningEffort | null;
+  fastModeEnabled?: boolean;
   options: ReadonlyArray<CodexReasoningEffort>;
   onEffortChange: (effort: CodexReasoningEffort) => void;
-  onFastModeChange: (enabled: boolean) => void;
+  onFastModeChange?: (enabled: boolean) => void;
 }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const defaultReasoningEffort = getDefaultReasoningEffort("codex");
   const reasoningLabelByOption: Record<CodexReasoningEffort, string> = {
     low: "Low",
     medium: "Medium",
@@ -6076,7 +6522,7 @@ const CodexTraitsPicker = memo(function CodexTraitsPicker(props: {
   };
   const triggerLabel = [
     reasoningLabelByOption[props.effort],
-    ...(props.fastModeEnabled ? ["Fast"] : []),
+    ...(props.onFastModeChange && props.fastModeEnabled ? ["Fast"] : []),
   ]
     .filter(Boolean)
     .join(" · ");
@@ -6115,24 +6561,28 @@ const CodexTraitsPicker = memo(function CodexTraitsPicker(props: {
             {props.options.map((effort) => (
               <MenuRadioItem key={effort} value={effort}>
                 {reasoningLabelByOption[effort]}
-                {effort === defaultReasoningEffort ? " (default)" : ""}
+                {effort === props.defaultEffort ? " (default)" : ""}
               </MenuRadioItem>
             ))}
           </MenuRadioGroup>
         </MenuGroup>
-        <MenuDivider />
-        <MenuGroup>
-          <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Fast Mode</div>
-          <MenuRadioGroup
-            value={props.fastModeEnabled ? "on" : "off"}
-            onValueChange={(value) => {
-              props.onFastModeChange(value === "on");
-            }}
-          >
-            <MenuRadioItem value="off">off</MenuRadioItem>
-            <MenuRadioItem value="on">on</MenuRadioItem>
-          </MenuRadioGroup>
-        </MenuGroup>
+        {props.onFastModeChange ? (
+          <>
+            <MenuDivider />
+            <MenuGroup>
+              <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Fast Mode</div>
+              <MenuRadioGroup
+                value={props.fastModeEnabled ? "on" : "off"}
+                onValueChange={(value) => {
+                  props.onFastModeChange?.(value === "on");
+                }}
+              >
+                <MenuRadioItem value="off">off</MenuRadioItem>
+                <MenuRadioItem value="on">on</MenuRadioItem>
+              </MenuRadioGroup>
+            </MenuGroup>
+          </>
+        ) : null}
       </MenuPopup>
     </Menu>
   );
