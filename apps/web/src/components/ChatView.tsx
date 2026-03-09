@@ -6064,6 +6064,10 @@ function normalizeCopilotRemainingPercentage(value: number): number {
   return Math.min(100, Math.max(0, normalized));
 }
 
+function formatCopilotQuotaPercentage(value: number): string {
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
+}
+
 function getCopilotQuotaPriority(key: string): number {
   const index = COPILOT_QUOTA_PRIORITY.findIndex((candidate) => candidate === key);
   return index === -1 ? Number.POSITIVE_INFINITY : index;
@@ -6094,19 +6098,24 @@ function formatCopilotQuotaResetDate(value: string | undefined): string | null {
 
 function deriveCopilotQuotaSummary(
   quotaSnapshots: ReadonlyArray<ServerProviderQuotaSnapshot> | undefined,
-): { title: string; detail: string } | null {
+): {
+  title: string;
+  detail: string;
+  remainingPercent: number;
+  progressTone: "default" | "warning" | "danger";
+} | null {
   const snapshot = pickCopilotQuotaSnapshot(quotaSnapshots);
   if (!snapshot) return null;
+  const remainingPercent =
+    snapshot.entitlementRequests > 0
+      ? Math.min(100, Math.max(0, (snapshot.remainingRequests / snapshot.entitlementRequests) * 100))
+      : normalizeCopilotRemainingPercentage(snapshot.remainingPercentage);
 
   const detailParts: string[] = [];
   if (snapshot.entitlementRequests > 0) {
     detailParts.push(`${snapshot.remainingRequests}/${snapshot.entitlementRequests} left`);
   } else {
-    detailParts.push(
-      `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(
-        normalizeCopilotRemainingPercentage(snapshot.remainingPercentage),
-      )}% remaining`,
-    );
+    detailParts.push(`${formatCopilotQuotaPercentage(remainingPercent)}% remaining`);
   }
   if (snapshot.overage > 0) {
     detailParts.push(`${snapshot.overage} overage`);
@@ -6119,6 +6128,9 @@ function deriveCopilotQuotaSummary(
   return {
     title: formatCopilotQuotaLabel(snapshot.key),
     detail: detailParts.join(" · "),
+    remainingPercent,
+    progressTone:
+      remainingPercent <= 10 ? "danger" : remainingPercent <= 25 ? "warning" : "default",
   };
 }
 
@@ -6128,7 +6140,12 @@ const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   lockedProvider: ProviderKind | null;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>>;
   copilotModels: ReadonlyArray<ServerProviderModel>;
-  copilotQuotaSummary: { title: string; detail: string } | null;
+  copilotQuotaSummary: {
+    title: string;
+    detail: string;
+    remainingPercent: number;
+    progressTone: "default" | "warning" | "danger";
+  } | null;
   compact?: boolean;
   disabled?: boolean;
   onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
@@ -6208,9 +6225,36 @@ const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                     <p className="mt-1 text-xs font-medium text-foreground/90">
                       {props.copilotQuotaSummary.title}
                     </p>
-                    <p className="text-[11px] text-muted-foreground/80">
-                      {props.copilotQuotaSummary.detail}
-                    </p>
+                    <div className="mt-0.5 flex items-baseline justify-between gap-3">
+                      <p className="text-[11px] text-muted-foreground/80">
+                        {props.copilotQuotaSummary.detail}
+                      </p>
+                      <span className="shrink-0 text-[10px] font-medium tabular-nums uppercase tracking-[0.08em] text-muted-foreground/70">
+                        {formatCopilotQuotaPercentage(props.copilotQuotaSummary.remainingPercent)}%
+                      </span>
+                    </div>
+                    <div
+                      role="progressbar"
+                      aria-label={`${props.copilotQuotaSummary.title} quota remaining`}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={Math.round(props.copilotQuotaSummary.remainingPercent)}
+                      className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-black/10 dark:bg-white/15"
+                    >
+                      <div
+                        className={cn(
+                          "h-full rounded-full transition-[width,background-color] duration-200",
+                          props.copilotQuotaSummary.progressTone === "danger"
+                            ? "bg-red-500 dark:bg-red-400"
+                            : props.copilotQuotaSummary.progressTone === "warning"
+                              ? "bg-amber-500 dark:bg-amber-400"
+                              : "bg-black dark:bg-white",
+                        )}
+                        style={{
+                          width: `${Math.max(0, Math.min(100, props.copilotQuotaSummary.remainingPercent))}%`,
+                        }}
+                      />
+                    </div>
                   </div>
                 ) : null}
                 <MenuGroup>
