@@ -30,6 +30,8 @@ import {
   DEFAULT_RUNTIME_MODE,
   DEFAULT_MODEL_BY_PROVIDER,
   type DesktopUpdateState,
+  type ModelSlug,
+  type ProviderKind,
   ProjectId,
   ThreadId,
   type GitStatusResult,
@@ -258,6 +260,7 @@ export default function Sidebar() {
   const toggleProject = useStore((store) => store.toggleProject);
   const reorderProjects = useStore((store) => store.reorderProjects);
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearThreadDraft);
+  const draftByThreadId = useComposerDraftStore((store) => store.draftsByThreadId);
   const getDraftThreadByProjectId = useComposerDraftStore(
     (store) => store.getDraftThreadByProjectId,
   );
@@ -266,6 +269,8 @@ export default function Sidebar() {
   const clearTerminalState = useTerminalStateStore((state) => state.clearTerminalState);
   const setProjectDraftThreadId = useComposerDraftStore((store) => store.setProjectDraftThreadId);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
+  const setDraftProvider = useComposerDraftStore((store) => store.setProvider);
+  const setDraftModel = useComposerDraftStore((store) => store.setModel);
   const clearProjectDraftThreadId = useComposerDraftStore(
     (store) => store.clearProjectDraftThreadId,
   );
@@ -398,11 +403,34 @@ export default function Sidebar() {
         branch?: string | null;
         worktreePath?: string | null;
         envMode?: DraftThreadEnvMode;
+        provider?: ProviderKind | null;
+        model?: ModelSlug | null;
       },
     ): Promise<void> => {
+      const activeThread = routeThreadId
+        ? threads.find((thread) => thread.id === routeThreadId) ?? null
+        : null;
+      const activeDraftState = routeThreadId ? (draftByThreadId[routeThreadId] ?? null) : null;
+      const activeDraftThread = routeThreadId ? getDraftThread(routeThreadId) : null;
+      const sourceProjectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? null;
+      const shouldSeedFromActiveContext = sourceProjectId === projectId;
+      const nextProvider =
+        options?.provider !== undefined
+          ? (options.provider ?? null)
+          : shouldSeedFromActiveContext
+            ? (activeDraftState?.provider ?? activeThread?.session?.provider ?? null)
+            : null;
+      const nextModel =
+        options?.model !== undefined
+          ? (options.model ?? null)
+          : shouldSeedFromActiveContext
+            ? (activeDraftState?.model ?? activeThread?.model ?? null)
+            : null;
       const hasBranchOption = options?.branch !== undefined;
       const hasWorktreePathOption = options?.worktreePath !== undefined;
       const hasEnvModeOption = options?.envMode !== undefined;
+      const hasProviderOption = nextProvider !== null;
+      const hasModelOption = nextModel !== null;
       const storedDraftThread = getDraftThreadByProjectId(projectId);
       if (storedDraftThread) {
         return (async () => {
@@ -412,6 +440,12 @@ export default function Sidebar() {
               ...(hasWorktreePathOption ? { worktreePath: options?.worktreePath ?? null } : {}),
               ...(hasEnvModeOption ? { envMode: options?.envMode } : {}),
             });
+          }
+          if (hasProviderOption) {
+            setDraftProvider(storedDraftThread.threadId, nextProvider);
+          }
+          if (hasModelOption) {
+            setDraftModel(storedDraftThread.threadId, nextModel, nextProvider);
           }
           setProjectDraftThreadId(projectId, storedDraftThread.threadId);
           if (routeThreadId === storedDraftThread.threadId) {
@@ -425,7 +459,6 @@ export default function Sidebar() {
       }
       clearProjectDraftThreadId(projectId);
 
-      const activeDraftThread = routeThreadId ? getDraftThread(routeThreadId) : null;
       if (activeDraftThread && routeThreadId && activeDraftThread.projectId === projectId) {
         if (hasBranchOption || hasWorktreePathOption || hasEnvModeOption) {
           setDraftThreadContext(routeThreadId, {
@@ -433,6 +466,12 @@ export default function Sidebar() {
             ...(hasWorktreePathOption ? { worktreePath: options?.worktreePath ?? null } : {}),
             ...(hasEnvModeOption ? { envMode: options?.envMode } : {}),
           });
+        }
+        if (hasProviderOption) {
+          setDraftProvider(routeThreadId, nextProvider);
+        }
+        if (hasModelOption) {
+          setDraftModel(routeThreadId, nextModel, nextProvider);
         }
         setProjectDraftThreadId(projectId, routeThreadId);
         return Promise.resolve();
@@ -447,6 +486,12 @@ export default function Sidebar() {
           envMode: options?.envMode ?? "local",
           runtimeMode: DEFAULT_RUNTIME_MODE,
         });
+        if (hasProviderOption) {
+          setDraftProvider(threadId, nextProvider);
+        }
+        if (hasModelOption) {
+          setDraftModel(threadId, nextModel, nextProvider);
+        }
 
         await navigate({
           to: "/$threadId",
@@ -456,12 +501,16 @@ export default function Sidebar() {
     },
     [
       clearProjectDraftThreadId,
+      draftByThreadId,
       getDraftThreadByProjectId,
       navigate,
       getDraftThread,
       routeThreadId,
+      setDraftModel,
       setDraftThreadContext,
+      setDraftProvider,
       setProjectDraftThreadId,
+      threads,
     ],
   );
 
