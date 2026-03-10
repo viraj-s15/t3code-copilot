@@ -535,10 +535,10 @@ const ToolWorkEntryRow = memo(function ToolWorkEntryRow(props: {
   const displayText = preview ? `${heading} - ${preview}` : heading;
   const hasExpandedDetails = Boolean(
     workEntry.command ||
-      primaryPath ||
-      additionalPaths.length > 0 ||
-      workEntry.output ||
-      typeof workEntry.exitCode === "number",
+    primaryPath ||
+    additionalPaths.length > 0 ||
+    workEntry.output ||
+    typeof workEntry.exitCode === "number",
   );
 
   const summaryRow = (
@@ -600,7 +600,9 @@ const ToolWorkEntryRow = memo(function ToolWorkEntryRow(props: {
           title={workEntry.command}
         >
           <TerminalIcon className="size-3 shrink-0 text-muted-foreground/65" />
-          <span className="truncate font-mono text-[10px] text-foreground/78">{workEntry.command}</span>
+          <span className="truncate font-mono text-[10px] text-foreground/78">
+            {workEntry.command}
+          </span>
         </div>
       )}
 
@@ -699,7 +701,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
       }}
     >
       <div className="flex items-center gap-2 transition-[opacity,translate] duration-200">
-        <span className={cn("flex size-5 shrink-0 items-center justify-center", iconConfig.className)}>
+        <span
+          className={cn("flex size-5 shrink-0 items-center justify-center", iconConfig.className)}
+        >
           <EntryIcon className="size-3" />
         </span>
         <div className="min-w-0 flex-1 overflow-hidden animate-in fade-in duration-300">
@@ -1390,7 +1394,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   ]);
   const selectedCopilotModelMetadata =
     selectedProvider === "copilot"
-      ? copilotProviderModels.find((model) => model.id === selectedModel) ?? null
+      ? (copilotProviderModels.find((model) => model.id === selectedModel) ?? null)
       : null;
   const reasoningOptions =
     selectedProvider === "codex"
@@ -4175,7 +4179,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
                 onDrop={onComposerDrop}
               >
                 {interactionMode === "plan" && (
-                  <span className={`absolute -top-3 left-5 rounded-full border bg-card transition-colors duration-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest ${isDragOverComposer ? "border-ring-plan/70 text-ring-plan" : "border-border group-focus-within:border-ring-plan/45 text-ring-plan/50 group-focus-within:text-ring-plan"}`}>
+                  <span
+                    className={`absolute -top-3 left-5 rounded-full border bg-card transition-colors duration-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest ${isDragOverComposer ? "border-ring-plan/70 text-ring-plan" : "border-border group-focus-within:border-ring-plan/45 text-ring-plan/50 group-focus-within:text-ring-plan"}`}
+                  >
                     Plan
                   </span>
                 )}
@@ -6249,11 +6255,13 @@ function pickCopilotQuotaSnapshot(
 ): ServerProviderQuotaSnapshot | null {
   if (!quotaSnapshots || quotaSnapshots.length === 0) return null;
 
-  return quotaSnapshots.toSorted((left, right) => {
-    const priorityDiff = getCopilotQuotaPriority(left.key) - getCopilotQuotaPriority(right.key);
-    if (priorityDiff !== 0) return priorityDiff;
-    return left.key.localeCompare(right.key);
-  })[0] ?? null;
+  return (
+    quotaSnapshots.toSorted((left, right) => {
+      const priorityDiff = getCopilotQuotaPriority(left.key) - getCopilotQuotaPriority(right.key);
+      if (priorityDiff !== 0) return priorityDiff;
+      return left.key.localeCompare(right.key);
+    })[0] ?? null
+  );
 }
 
 function formatCopilotQuotaResetDate(value: string | undefined): string | null {
@@ -6279,9 +6287,7 @@ function deriveCopilotQuotaSummary(
 
   const remainingPercent = normalizeCopilotRemainingPercentage(snapshot.remainingPercentage);
   const resetDate = formatCopilotQuotaResetDate(snapshot.resetDate);
-  const detailParts = [
-    `${snapshot.remainingRequests}/${snapshot.entitlementRequests} remaining`,
-  ];
+  const detailParts = [`${snapshot.remainingRequests}/${snapshot.entitlementRequests} remaining`];
   if (resetDate) {
     detailParts.push(`resets ${resetDate}`);
   }
@@ -6320,7 +6326,7 @@ const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     [props.copilotModels],
   );
   const selectedCopilotModel =
-    props.provider === "copilot" ? copilotModelById.get(props.model) ?? null : null;
+    props.provider === "copilot" ? (copilotModelById.get(props.model) ?? null) : null;
   const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[props.provider];
 
   return (
