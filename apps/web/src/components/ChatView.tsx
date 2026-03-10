@@ -3638,8 +3638,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
               data-chat-composer-form="true"
             >
               <div
-                className={`group rounded-[20px] border bg-card transition-colors duration-200 focus-within:border-ring/45 ${
-                  isDragOverComposer ? "border-primary/70 bg-accent/30" : "border-border"
+                className={`group rounded-[20px] border bg-card transition-colors duration-200 ${
+                  isDragOverComposer
+                    ? "border-primary/70 bg-accent/30"
+                    : interactionMode === "plan"
+                      ? "border-border focus-within:border-amber-500/45"
+                      : "border-border focus-within:border-ring/45"
                 }`}
                 onDragEnter={onComposerDragEnter}
                 onDragOver={onComposerDragOver}
@@ -4048,7 +4052,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
                         ) : (
                           <button
                             type="submit"
-                            className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/90 text-primary-foreground transition-all duration-150 hover:bg-primary hover:scale-105 disabled:opacity-30 disabled:hover:scale-100 sm:h-8 sm:w-8"
+                            className={`flex h-9 w-9 items-center justify-center rounded-full transition-all duration-150 disabled:opacity-30 disabled:hover:scale-100 sm:h-8 sm:w-8 ${
+                              interactionMode === "plan"
+                                ? "bg-amber-500/90 text-white hover:bg-amber-500 hover:scale-105"
+                                : "bg-primary/90 text-primary-foreground hover:bg-primary hover:scale-105"
+                            }`}
                             disabled={
                               isSendBusy ||
                               isConnecting ||
