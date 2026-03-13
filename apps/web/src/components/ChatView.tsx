@@ -58,6 +58,8 @@ import { skillsListQueryOptions } from "~/lib/skillsReactQuery";
 import { isElectron } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import {
+  clampCollapsedComposerCursor,
+  collapseExpandedComposerCursor,
   type ComposerSlashCommand,
   type ComposerTrigger,
   type ComposerTriggerKind,
@@ -82,7 +84,6 @@ import {
   hasToolActivityForTurn,
   isLatestTurnSettled,
   formatElapsed,
-  formatTimestamp,
   type WorkLogEntry,
 } from "../session-logic";
 import { AUTO_SCROLL_BOTTOM_THRESHOLD_PX, isScrollContainerNearBottom } from "../chat-scroll";
@@ -225,6 +226,7 @@ import {
   getAppModelOptions,
   resolveAppModelSelection,
   type BuiltInAppModelOption,
+  type TimestampFormat,
   useAppSettings,
 } from "../appSettings";
 import {
@@ -241,10 +243,15 @@ import { clamp } from "effect/Number";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { estimateTimelineMessageHeight } from "./timelineHeight";
+import { formatTimestamp } from "../timestampFormat";
 
-function formatMessageMeta(createdAt: string, duration: string | null): string {
-  if (!duration) return formatTimestamp(createdAt);
-  return `${formatTimestamp(createdAt)} • ${duration}`;
+function formatMessageMeta(
+  createdAt: string,
+  duration: string | null,
+  timestampFormat: TimestampFormat,
+): string {
+  if (!duration) return formatTimestamp(createdAt, timestampFormat);
+  return `${formatTimestamp(createdAt, timestampFormat)} • ${duration}`;
 }
 
 function formatWorkingTimer(startIso: string, endIso: string): string | null {
@@ -521,8 +528,9 @@ function isRichToolWorkEntry(workEntry: WorkLogEntry): boolean {
 const ToolWorkEntryRow = memo(function ToolWorkEntryRow(props: {
   workEntry: WorkLogEntry;
   workEntryIndex: number;
+  timestampFormat: TimestampFormat;
 }) {
-  const { workEntry, workEntryIndex } = props;
+  const { workEntry, workEntryIndex, timestampFormat } = props;
   const [open, setOpen] = useState(false);
   const iconConfig = workToneIcon(workEntry.tone);
   const EntryIcon = workEntryIcon(workEntry);
@@ -589,7 +597,7 @@ const ToolWorkEntryRow = memo(function ToolWorkEntryRow(props: {
         </Badge>
       )}
       <span className="shrink-0 text-[9px] text-muted-foreground/35">
-        {formatTimestamp(workEntry.createdAt)}
+        {formatTimestamp(workEntry.createdAt, timestampFormat)}
       </span>
     </div>
   );
@@ -686,8 +694,9 @@ const ToolWorkEntryRow = memo(function ToolWorkEntryRow(props: {
 const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workEntry: WorkLogEntry;
   workEntryIndex: number;
+  timestampFormat: TimestampFormat;
 }) {
-  const { workEntry, workEntryIndex } = props;
+  const { workEntry, workEntryIndex, timestampFormat } = props;
   const iconConfig = workToneIcon(workEntry.tone);
   const EntryIcon = workEntryIcon(workEntry);
   const preview = workEntryPreview(workEntry);
@@ -724,7 +733,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           </p>
         </div>
         <span className="shrink-0 text-[9px] text-muted-foreground/35">
-          {formatTimestamp(workEntry.createdAt)}
+          {formatTimestamp(workEntry.createdAt, timestampFormat)}
         </span>
       </div>
       {hasChangedFiles && !previewIsChangedFiles && (
@@ -1067,6 +1076,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadBranch = useStore((store) => store.setThreadBranch);
   const { settings } = useAppSettings();
+  const timestampFormat = settings.timestampFormat;
   const navigate = useNavigate();
   const rawSearch = useSearch({
     strict: false,
@@ -1149,7 +1159,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const [attachmentPreviewHandoffByMessageId, setAttachmentPreviewHandoffByMessageId] = useState<
     Record<string, string[]>
   >({});
-  const [composerCursor, setComposerCursor] = useState(() => prompt.length);
+  const [composerCursor, setComposerCursor] = useState(() =>
+    collapseExpandedComposerCursor(prompt, prompt.length),
+  );
   const [composerTrigger, setComposerTrigger] = useState<ComposerTrigger | null>(() =>
     detectComposerTrigger(prompt, prompt.length),
   );
@@ -1577,23 +1589,47 @@ export default function ChatView({ threadId }: ChatViewProps) {
     pendingUserInputs.length > 0 ||
     (showPlanFollowUpPrompt && activeProposedPlan !== null);
   const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
+  const lastSyncedPendingInputRef = useRef<{
+    requestId: string | null;
+    questionId: string | null;
+  } | null>(null);
   useEffect(() => {
-    if (!activePendingProgress) {
+    const nextCustomAnswer = activePendingProgress?.customAnswer;
+    if (typeof nextCustomAnswer !== "string") {
+      lastSyncedPendingInputRef.current = null;
       return;
     }
-    promptRef.current = activePendingProgress.customAnswer;
-    setComposerCursor(activePendingProgress.customAnswer.length);
+    const nextRequestId = activePendingUserInput?.requestId ?? null;
+    const nextQuestionId = activePendingProgress?.activeQuestion?.id ?? null;
+    const questionChanged =
+      lastSyncedPendingInputRef.current?.requestId !== nextRequestId ||
+      lastSyncedPendingInputRef.current?.questionId !== nextQuestionId;
+    const textChangedExternally = promptRef.current !== nextCustomAnswer;
+
+    lastSyncedPendingInputRef.current = {
+      requestId: nextRequestId,
+      questionId: nextQuestionId,
+    };
+
+    if (!questionChanged && !textChangedExternally) {
+      return;
+    }
+
+    promptRef.current = nextCustomAnswer;
+    const nextCursor = collapseExpandedComposerCursor(nextCustomAnswer, nextCustomAnswer.length);
+    setComposerCursor(nextCursor);
     setComposerTrigger(
       detectComposerTrigger(
-        activePendingProgress.customAnswer,
-        expandCollapsedComposerCursor(
-          activePendingProgress.customAnswer,
-          activePendingProgress.customAnswer.length,
-        ),
+        nextCustomAnswer,
+        expandCollapsedComposerCursor(nextCustomAnswer, nextCursor),
       ),
     );
     setComposerHighlightedItemId(null);
-  }, [activePendingProgress, activePendingUserInput?.requestId]);
+  }, [
+    activePendingProgress?.activeQuestion?.id,
+    activePendingProgress?.customAnswer,
+    activePendingUserInput?.requestId,
+  ]);
   useEffect(() => {
     attachmentPreviewHandoffByMessageIdRef.current = attachmentPreviewHandoffByMessageId;
   }, [attachmentPreviewHandoffByMessageId]);
@@ -2705,7 +2741,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
 
   useEffect(() => {
     promptRef.current = prompt;
-    setComposerCursor((existing) => Math.min(Math.max(0, existing), prompt.length));
+    setComposerCursor((existing) => clampCollapsedComposerCursor(prompt, existing));
   }, [prompt]);
 
   useEffect(() => {
@@ -2718,7 +2754,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     setSendPhase("idle");
     setSendStartedAt(null);
     setComposerHighlightedItemId(null);
-    setComposerCursor(promptRef.current.length);
+    setComposerCursor(collapseExpandedComposerCursor(promptRef.current, promptRef.current.length));
     setComposerTrigger(detectComposerTrigger(promptRef.current, promptRef.current.length));
     dragDepthRef.current = 0;
     setIsDragOverComposer(false);
@@ -2996,6 +3032,14 @@ export default function ChatView({ threadId }: ChatViewProps) {
 
   const addComposerImages = (files: File[]) => {
     if (!activeThreadId || files.length === 0) return;
+
+    if (pendingUserInputs.length > 0) {
+      toastManager.add({
+        type: "error",
+        title: "Attach images after answering plan questions.",
+      });
+      return;
+    }
 
     const nextImages: ComposerImageAttachment[] = [];
     let nextImageCount = composerImagesRef.current.length;
@@ -3408,7 +3452,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         });
         promptRef.current = trimmed;
         setPrompt(trimmed);
-        setComposerCursor(trimmed.length);
+        setComposerCursor(collapseExpandedComposerCursor(trimmed, trimmed.length));
         addComposerImagesToDraft(composerImagesSnapshot.map(cloneComposerImageForRetry));
         setComposerTrigger(detectComposerTrigger(trimmed, trimmed.length));
       }
@@ -3526,7 +3570,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
 
   const onChangeActivePendingUserInputCustomAnswer = useCallback(
-    (questionId: string, value: string, nextCursor: number, cursorAdjacentToMention: boolean) => {
+    (
+      questionId: string,
+      value: string,
+      nextCursor: number,
+      expandedCursor: number,
+      cursorAdjacentToMention: boolean,
+    ) => {
       if (!activePendingUserInput) {
         return;
       }
@@ -3543,9 +3593,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       }));
       setComposerCursor(nextCursor);
       setComposerTrigger(
-        cursorAdjacentToMention
-          ? null
-          : detectComposerTrigger(value, expandCollapsedComposerCursor(value, nextCursor)),
+        cursorAdjacentToMention ? null : detectComposerTrigger(value, expandedCursor),
       );
     },
     [activePendingUserInput],
@@ -3888,6 +3936,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         return false;
       }
       const next = replaceTextRange(promptRef.current, rangeStart, rangeEnd, replacement);
+      const nextCursor = collapseExpandedComposerCursor(next.text, next.cursor);
       promptRef.current = next.text;
       const activePendingQuestion = activePendingProgress?.activeQuestion;
       if (activePendingQuestion && activePendingUserInput) {
@@ -3904,33 +3953,53 @@ export default function ChatView({ threadId }: ChatViewProps) {
       } else {
         setPrompt(next.text);
       }
-      setComposerCursor(next.cursor);
-      setComposerTrigger(detectComposerTrigger(next.text, next.cursor));
+      setComposerCursor(nextCursor);
+      setComposerTrigger(
+        detectComposerTrigger(next.text, expandCollapsedComposerCursor(next.text, nextCursor)),
+      );
       window.requestAnimationFrame(() => {
-        composerEditorRef.current?.focusAt(next.cursor);
+        composerEditorRef.current?.focusAt(nextCursor);
       });
       return true;
     },
     [activePendingProgress?.activeQuestion, activePendingUserInput, setPrompt],
   );
 
-  const readComposerSnapshot = useCallback((): { value: string; cursor: number } => {
+  const readComposerSnapshot = useCallback((): {
+    value: string;
+    cursor: number;
+    expandedCursor: number;
+  } => {
     const editorSnapshot = composerEditorRef.current?.readSnapshot();
     if (editorSnapshot) {
       return editorSnapshot;
     }
-    return { value: promptRef.current, cursor: composerCursor };
+    return {
+      value: promptRef.current,
+      cursor: composerCursor,
+      expandedCursor: expandCollapsedComposerCursor(promptRef.current, composerCursor),
+    };
   }, [composerCursor]);
 
+  const extendReplacementRangeForTrailingSpace = (
+    text: string,
+    rangeEnd: number,
+    replacement: string,
+  ): number => {
+    if (!replacement.endsWith(" ")) {
+      return rangeEnd;
+    }
+    return text[rangeEnd] === " " ? rangeEnd + 1 : rangeEnd;
+  };
+
   const resolveActiveComposerTrigger = useCallback((): {
-    snapshot: { value: string; cursor: number };
+    snapshot: { value: string; cursor: number; expandedCursor: number };
     trigger: ComposerTrigger | null;
   } => {
     const snapshot = readComposerSnapshot();
-    const expandedCursor = expandCollapsedComposerCursor(snapshot.value, snapshot.cursor);
     return {
       snapshot,
-      trigger: detectComposerTrigger(snapshot.value, expandedCursor),
+      trigger: detectComposerTrigger(snapshot.value, snapshot.expandedCursor),
     };
   }, [readComposerSnapshot]);
 
@@ -3943,13 +4012,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
       });
       const { snapshot, trigger } = resolveActiveComposerTrigger();
       if (!trigger) return;
-      const expectedToken = snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd);
       if (item.type === "path") {
+        const replacement = `@${item.path} `;
+        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+          snapshot.value,
+          trigger.rangeEnd,
+          replacement,
+        );
         const applied = applyPromptReplacement(
           trigger.rangeStart,
-          trigger.rangeEnd,
-          `@${item.path} `,
-          { expectedText: expectedToken },
+          replacementRangeEnd,
+          replacement,
+          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
         );
         if (applied) {
           setComposerHighlightedItemId(null);
@@ -3961,7 +4035,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           trigger.rangeStart,
           trigger.rangeEnd,
           `$${item.skillName} `,
-          { expectedText: expectedToken },
+          { expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd) },
         );
         if (applied) {
           setComposerHighlightedItemId(null);
@@ -3970,9 +4044,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
       }
       if (item.type === "slash-command") {
         if (item.command === "model") {
-          const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "/model ", {
-            expectedText: expectedToken,
-          });
+          const replacement = "/model ";
+          const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+            snapshot.value,
+            trigger.rangeEnd,
+            replacement,
+          );
+          const applied = applyPromptReplacement(
+            trigger.rangeStart,
+            replacementRangeEnd,
+            replacement,
+            { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+          );
           if (applied) {
             setComposerHighlightedItemId(null);
           }
@@ -3980,7 +4063,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         }
         if (item.command === "skills") {
           const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "/skills ", {
-            expectedText: expectedToken,
+            expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
           });
           if (applied) {
             setComposerHighlightedItemId(null);
@@ -3989,7 +4072,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         }
         void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
         const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
-          expectedText: expectedToken,
+          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
         });
         if (applied) {
           setComposerHighlightedItemId(null);
@@ -3998,7 +4081,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       }
       onProviderModelSelect(item.provider, item.model);
       const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
-        expectedText: expectedToken,
+        expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
       });
       if (applied) {
         setComposerHighlightedItemId(null);
@@ -4040,12 +4123,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
     (composerTriggerKind === "slash-skill" && skillsQuery.isLoading);
 
   const onPromptChange = useCallback(
-    (nextPrompt: string, nextCursor: number, cursorAdjacentToMention: boolean) => {
+    (
+      nextPrompt: string,
+      nextCursor: number,
+      expandedCursor: number,
+      cursorAdjacentToMention: boolean,
+    ) => {
       if (activePendingProgress?.activeQuestion && activePendingUserInput) {
         onChangeActivePendingUserInputCustomAnswer(
           activePendingProgress.activeQuestion.id,
           nextPrompt,
           nextCursor,
+          expandedCursor,
           cursorAdjacentToMention,
         );
         return;
@@ -4054,12 +4143,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       setPrompt(nextPrompt);
       setComposerCursor(nextCursor);
       setComposerTrigger(
-        cursorAdjacentToMention
-          ? null
-          : detectComposerTrigger(
-              nextPrompt,
-              expandCollapsedComposerCursor(nextPrompt, nextCursor),
-            ),
+        cursorAdjacentToMention ? null : detectComposerTrigger(nextPrompt, expandedCursor),
       );
     },
     [
@@ -4246,6 +4330,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
               onImageExpand={onExpandTimelineImage}
               markdownCwd={gitCwd ?? undefined}
               resolvedTheme={resolvedTheme}
+              timestampFormat={timestampFormat}
               workspaceRoot={activeProject?.cwd ?? undefined}
             />
           </div>
@@ -4790,6 +4875,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
             activeProposedPlan={activeProposedPlan}
             markdownCwd={gitCwd ?? undefined}
             workspaceRoot={activeProject?.cwd ?? undefined}
+            timestampFormat={timestampFormat}
             onClose={() => {
               setPlanSidebarOpen(false);
               // Track that the user explicitly dismissed for this turn so auto-open won't fight them.
@@ -5715,6 +5801,7 @@ interface MessagesTimelineProps {
   onImageExpand: (preview: ExpandedImagePreview) => void;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
+  timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
 }
 
@@ -5769,6 +5856,7 @@ const MessagesTimeline = memo(function MessagesTimeline({
   onImageExpand,
   markdownCwd,
   resolvedTheme,
+  timestampFormat,
   workspaceRoot,
 }: MessagesTimelineProps) {
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
@@ -6010,12 +6098,14 @@ const MessagesTimeline = memo(function MessagesTimeline({
                       key={`work-row:${workEntry.id}`}
                       workEntry={workEntry}
                       workEntryIndex={workEntryIndex}
+                      timestampFormat={timestampFormat}
                     />
                   ) : (
                     <SimpleWorkEntryRow
                       key={`work-row:${workEntry.id}`}
                       workEntry={workEntry}
                       workEntryIndex={workEntryIndex}
+                      timestampFormat={timestampFormat}
                     />
                   );
                 })}
@@ -6091,7 +6181,7 @@ const MessagesTimeline = memo(function MessagesTimeline({
                     )}
                   </div>
                   <p className="text-right text-[10px] text-muted-foreground/30">
-                    {formatTimestamp(row.message.createdAt)}
+                    {formatTimestamp(row.message.createdAt, timestampFormat)}
                   </p>
                 </div>
               </div>
@@ -6182,6 +6272,7 @@ const MessagesTimeline = memo(function MessagesTimeline({
                     row.message.streaming
                       ? formatElapsed(row.message.createdAt, nowIso)
                       : formatElapsed(row.message.createdAt, row.message.completedAt),
+                    timestampFormat,
                   )}
                 </p>
               </div>
